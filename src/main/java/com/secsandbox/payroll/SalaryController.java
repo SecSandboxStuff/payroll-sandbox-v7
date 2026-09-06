@@ -21,11 +21,11 @@ public class SalaryController {
     private static final BigDecimal RAISE = new BigDecimal("1.03");
 
     private final SalaryRepository salaryRepository;
-    private final PayrollLedgerService ledgerService;
+    private final PayrollDisbursementService disbursementService;
 
-    public SalaryController(SalaryRepository salaryRepository, PayrollLedgerService ledgerService) {
+    public SalaryController(SalaryRepository salaryRepository, PayrollDisbursementService disbursementService) {
         this.salaryRepository = salaryRepository;
-        this.ledgerService = ledgerService;
+        this.disbursementService = disbursementService;
     }
 
     // VULNERABLE: dumps every salary row, no authz guard.
@@ -62,27 +62,32 @@ public class SalaryController {
         return salaryRepository.saveAll(revised);
     }
 
-    // Role-guarded (so not CWE-862), but the caller still names the record:
-    // CWE-639 on the lookup, CWE-312 on the audit log.
+    // Role-guarded (so not CWE-862), but the caller still names the batch:
+    // CWE-639 on the lookup.
     @PreAuthorize("hasRole('EMPLOYEE')")
-    @GetMapping("/ledger/salaries/{id}")
-    public Salary readLedgerEntry(@PathVariable Long id) {
-        Salary salary = ledgerService.lookupSalary(id);
-        ledgerService.auditPayout(salary);
-        return salary;
+    @GetMapping("/disbursements/{batchRef}")
+    public Salary viewDisbursement(@PathVariable Long batchRef) {
+        return disbursementService.loadDisbursement(batchRef);
     }
 
-    // Role-guarded; CWE-639 on the second lookup site.
+    // Role-guarded; CWE-639 on the lookup, CWE-312 on the settle/abort logs.
     @PreAuthorize("hasRole('PAYROLL_CLERK')")
-    @PostMapping("/ledger/salaries/{id}/adjust")
-    public Salary reviseLedgerEntry(@PathVariable Long id) {
-        return ledgerService.lookupForAdjustment(id);
+    @PostMapping("/disbursements/{batchRef}/settle")
+    public Salary settleDisbursement(@PathVariable Long batchRef, @RequestBody String approver) {
+        return disbursementService.settleDisbursement(batchRef, approver);
     }
 
-    // Role-guarded; CWE-319 — the export leaves over plaintext http.
+    // Role-guarded; CWE-312 — per-row payout detail hits the log.
     @Secured("ROLE_PAYROLL_ADMIN")
-    @PostMapping("/admin/ledger/export")
-    public int archiveLedger(@RequestBody String payload) throws Exception {
-        return ledgerService.exportSalaries(payload);
+    @PostMapping("/admin/disbursements/trace")
+    public void traceDisbursementRun(@RequestBody String runId) {
+        disbursementService.traceDisbursementRun(salaryRepository.findAll(), runId);
+    }
+
+    // Role-guarded; CWE-319 — the batch leaves over plaintext http.
+    @Secured("ROLE_PAYROLL_ADMIN")
+    @PostMapping("/admin/disbursements/transmit")
+    public int transmitBatch(@RequestBody String batchDocument) throws Exception {
+        return disbursementService.transmitBatch(batchDocument, "run-" + System.nanoTime());
     }
 }
