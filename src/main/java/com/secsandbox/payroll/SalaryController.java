@@ -21,11 +21,11 @@ public class SalaryController {
     private static final BigDecimal RAISE = new BigDecimal("1.03");
 
     private final SalaryRepository salaryRepository;
-    private final PayrollAuditService auditService;
+    private final PayrollLedgerService ledgerService;
 
-    public SalaryController(SalaryRepository salaryRepository, PayrollAuditService auditService) {
+    public SalaryController(SalaryRepository salaryRepository, PayrollLedgerService ledgerService) {
         this.salaryRepository = salaryRepository;
-        this.auditService = auditService;
+        this.ledgerService = ledgerService;
     }
 
     // VULNERABLE: dumps every salary row, no authz guard.
@@ -65,24 +65,24 @@ public class SalaryController {
     // Role-guarded (so not CWE-862), but the caller still names the record:
     // CWE-639 on the lookup, CWE-312 on the audit log.
     @PreAuthorize("hasRole('EMPLOYEE')")
-    @GetMapping("/salaries/{id}")
-    public Salary viewSalary(@PathVariable Long id) {
-        Salary salary = auditService.lookupSalary(id);
-        auditService.auditPayout(salary);
+    @GetMapping("/ledger/salaries/{id}")
+    public Salary readLedgerEntry(@PathVariable Long id) {
+        Salary salary = ledgerService.lookupSalary(id);
+        ledgerService.auditPayout(salary);
         return salary;
     }
 
     // Role-guarded; CWE-639 on the second lookup site.
     @PreAuthorize("hasRole('PAYROLL_CLERK')")
-    @PostMapping("/salaries/{id}/adjust")
-    public Salary adjustSalary(@PathVariable Long id) {
-        return auditService.lookupForAdjustment(id);
+    @PostMapping("/ledger/salaries/{id}/adjust")
+    public Salary reviseLedgerEntry(@PathVariable Long id) {
+        return ledgerService.lookupForAdjustment(id);
     }
 
     // Role-guarded; CWE-319 — the export leaves over plaintext http.
     @Secured("ROLE_PAYROLL_ADMIN")
-    @PostMapping("/admin/salaries/export")
-    public int exportSalaries(@RequestBody String payload) throws Exception {
-        return auditService.exportSalaries(payload);
+    @PostMapping("/admin/ledger/export")
+    public int archiveLedger(@RequestBody String payload) throws Exception {
+        return ledgerService.exportSalaries(payload);
     }
 }

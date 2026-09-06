@@ -1,3 +1,14 @@
+/*
+ * payroll-sandbox v6 - the same ambiguous-receiver sinks as v5, deliberately moved.
+ *
+ * The six sink call sites below are byte-identical to v5's, but everything
+ * around them is different: the class is renamed, this header pushes every
+ * sink further down the file, and the controller wiring changed.
+ *
+ * sink_type_reasoning keys its cache on a content hash of the +/-10 line
+ * snippet around each call, not on (file, row), so a cold scan of this repo
+ * should resolve all six from the org-level reasoning DB with llm=0.
+ */
 package com.secsandbox.payroll;
 
 import java.net.URI;
@@ -13,18 +24,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
-/**
- * Audit/export side of the payroll app.
- *
- * Every sink here is reached through a receiver whose simple class name maps to
- * more than one library in the catalog (`Logger` -> slf4j / log4j / j.u.l,
- * `EntityManager` -> jakarta / javax, `HttpClient` -> java.net.http / apache),
- * so the graph cannot attribute the call from the simple name alone.
- */
 @Service
-public class PayrollAuditService {
+public class PayrollLedgerService {
 
-    private static final Logger log = LoggerFactory.getLogger(PayrollAuditService.class);
+    private static final Logger log = LoggerFactory.getLogger(PayrollLedgerService.class);
 
     private static final URI PAYROLL_EXPORT = URI.create("http://payroll-archive.internal/salaries");
 
