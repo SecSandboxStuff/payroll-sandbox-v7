@@ -1,0 +1,93 @@
+ package com.secsandbox.payroll;
+ 
+ import java.net.URI;
+ import java.net.http.HttpClient;
+ import java.net.http.HttpRequest;
+ import java.net.http.HttpResponse;
+ import java.nio.charset.StandardCharsets;
+ import java.time.Duration;
+ import java.util.List;
+ 
+ import jakarta.persistence.EntityManager;
+ import jakarta.persistence.PersistenceContext;
+ 
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ import org.springframework.stereotype.Service;
+ 
+ /**
+  * Disbursement side of the payroll app.
+  *
+  * Same three ambiguous receiver families as v5/v6 — `Logger`, `EntityManager`,
+  * `HttpClient` — so the graph still cannot attribute these calls from the
+  * simple class name and every site falls through to the Phase 2 LLM.
+  *
+  * Unlike v6, nothing here is content-identical to an earlier sandbox: every
+  * call line, every surrounding statement and the indentation around each sink
+  * differ, so the snippet hash is new and the reasoning DB cannot answer.
+  */
+ @Service
+ public class PayrollDisbursementService {
+ 
+     private static final Logger audit = LoggerFactory.getLogger(PayrollDisbursementService.class);
+ 
+     private static final URI DISBURSEMENT_GATEWAY =
+             URI.create("http://disbursement-gateway.internal/v3/batches");
+ 
+     private final HttpClient gatewayClient = HttpClient.newBuilder()
+             .connectTimeout(Duration.ofSeconds(4))
+             .build();
+ 
+     @PersistenceContext
+     private EntityManager entityManager;
+ 
+     /** CWE-639: the batch id comes straight off the request, no ownership check. */
+     public Salary loadDisbursement(Long batchRef) {
+         Salary disbursement = entityManager.find(Salary.class, batchRef);
+         if (disbursement == null) {
+             throw new IllegalArgumentException("no disbursement for batch " + batchRef);
+         }
+         return disbursement;
+     }
+ 
+     /** CWE-639 + CWE-312: second lookup, wrapped so the sink sits one level deeper. */
+     public Salary settleDisbursement(Long batchRef, String approver) {
+         try {
+             Salary pending = entityManager.find(Salary.class, batchRef);
+             audit.info(
+                     "settling batch={} employee={} gross={} approver={}",
+-                    batchRef, pending.getEmployeeName(), pending.getAmount(), approver);
++                    batchRef, pending.getEmployeeName(), pending.getAmount(), approver.replaceAll("[^a-zA-Z0-9 _-]", "")
+             return pending;
+         } catch (RuntimeException settlementFailure) {
+             audit.error(
+                     "settlement aborted for batch={} approver={}",
+                     batchRef, approver, settlementFailure);
+             throw settlementFailure;
+         }
+     }
+ 
+     /** CWE-312: per-row payout detail written to the log inside a loop. */
+     public void traceDisbursementRun(List<Salary> batch, String runId) {
+         for (Salary row : batch) {
+             if (row.getAmount() != null) {
+                 audit.warn(
+                         "run={} paying {} net={}",
+                         runId, row.getEmployeeName(), row.getAmount());
+             }
+         }
+     }
+ 
+     /** CWE-319: the whole batch is shipped to the gateway over plaintext http. */
+     public int transmitBatch(String batchDocument, String correlationId) throws Exception {
+         HttpRequest gatewayCall = HttpRequest.newBuilder(DISBURSEMENT_GATEWAY)
+                 .header("Content-Type", "application/json")
+                 .header("X-Correlation-Id", correlationId)
+                 .timeout(Duration.ofSeconds(20))
+                 .PUT(HttpRequest.BodyPublishers.ofString(batchDocument, StandardCharsets.UTF_8))
+                 .build();
+         HttpResponse<String> gatewayReply =
+                 gatewayClient.send(gatewayCall, HttpResponse.BodyHandlers.ofString());
+         return gatewayReply.statusCode();
+     }
+ }
