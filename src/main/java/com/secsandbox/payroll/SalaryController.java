@@ -6,6 +6,7 @@ import java.util.List;
 import org.springframework.security.access.annotation.Secured;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
@@ -20,9 +21,11 @@ public class SalaryController {
     private static final BigDecimal RAISE = new BigDecimal("1.03");
 
     private final SalaryRepository salaryRepository;
+    private final PayrollAuditService auditService;
 
-    public SalaryController(SalaryRepository salaryRepository) {
+    public SalaryController(SalaryRepository salaryRepository, PayrollAuditService auditService) {
         this.salaryRepository = salaryRepository;
+        this.auditService = auditService;
     }
 
     // VULNERABLE: dumps every salary row, no authz guard.
@@ -57,5 +60,29 @@ public class SalaryController {
     @PostMapping("/admin/salaries/publish")
     public List<Salary> publish(@RequestBody List<Salary> revised) {
         return salaryRepository.saveAll(revised);
+    }
+
+    // Role-guarded (so not CWE-862), but the caller still names the record:
+    // CWE-639 on the lookup, CWE-312 on the audit log.
+    @PreAuthorize("hasRole('EMPLOYEE')")
+    @GetMapping("/salaries/{id}")
+    public Salary viewSalary(@PathVariable Long id) {
+        Salary salary = auditService.lookupSalary(id);
+        auditService.auditPayout(salary);
+        return salary;
+    }
+
+    // Role-guarded; CWE-639 on the second lookup site.
+    @PreAuthorize("hasRole('PAYROLL_CLERK')")
+    @PostMapping("/salaries/{id}/adjust")
+    public Salary adjustSalary(@PathVariable Long id) {
+        return auditService.lookupForAdjustment(id);
+    }
+
+    // Role-guarded; CWE-319 — the export leaves over plaintext http.
+    @Secured("ROLE_PAYROLL_ADMIN")
+    @PostMapping("/admin/salaries/export")
+    public int exportSalaries(@RequestBody String payload) throws Exception {
+        return auditService.exportSalaries(payload);
     }
 }
